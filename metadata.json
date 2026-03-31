@@ -1,0 +1,5 @@
+{
+  "name": "WaveIQ Radio",
+  "description": "Privacy-first internet radio with AI-driven discovery and local listening insights.",
+  "requestFramePermissions": ["geolocation"]
+}
