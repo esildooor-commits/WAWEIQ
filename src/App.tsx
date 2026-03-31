@@ -154,7 +154,7 @@ const SettingsModal = ({
             onDragEnd={(_, info) => {
               if (info.offset.y > 150) onClose();
             }}
-            className="fixed top-0 left-0 bottom-0 right-0 z-[101] bg-hw-panel/98 backdrop-blur-xl overflow-y-auto flex flex-col p-8 custom-scrollbar max-h-[100dvh]"
+            className="fixed left-0 bottom-0 right-0 z-[101] bg-hw-panel/98 backdrop-blur-xl overflow-y-auto flex flex-col p-8 custom-scrollbar max-h-[90vh]"
           >
             {/* Handle */}
             <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-8" />
@@ -169,7 +169,7 @@ const SettingsModal = ({
               </button>
             </div>
 
-            <div className="space-y-8">
+            <div className="space-y-8 overflow-y-auto max-h-[90vh] pr-2 custom-scrollbar">
               {/* Sleep Timer */}
               <div>
                 <label className="text-xs uppercase tracking-widest text-hw-muted font-mono mb-4 flex items-center gap-2">
@@ -716,12 +716,12 @@ export default function App() {
 
     const fallbackToIp = async () => {
       try {
-        const res = await fetch('/api/location');
-        if (!res.ok) throw new Error("Location proxy fetch failed");
+        const res = await fetch('https://ipapi.co/json/');
+        if (!res.ok) throw new Error("Location fetch failed");
         const data = await res.json();
-        if (data && data.countryCode) {
-          setUserLocation({ country: data.country, countryCode: data.countryCode, city: data.city });
-          fetchLocalStations(data.countryCode);
+        if (data && data.country_code) {
+          setUserLocation({ country: data.country_name, countryCode: data.country_code, city: data.city });
+          fetchLocalStations(data.country_code);
         }
       } catch (ipError) {
         console.error("IP location fallback failed", ipError);
