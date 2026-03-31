@@ -106,6 +106,7 @@ const SettingsModal = ({
   uuid,
   eqGains,
   onEqChange,
+  onResetEq,
   sleepTimer,
   onSleepTimerChange
 }: { 
@@ -117,6 +118,7 @@ const SettingsModal = ({
   uuid: string;
   eqGains: number[];
   onEqChange: (index: number, value: number) => void;
+  onResetEq: () => void;
   sleepTimer: number | null;
   onSleepTimerChange: (minutes: number | null) => void;
 }) => {
@@ -223,9 +225,7 @@ const SettingsModal = ({
                     </div>
                   ))}
                   <button 
-                    onClick={() => {
-                      [0,1,2,3,4].forEach(i => onEqChange(i, 0));
-                    }}
+                    onClick={onResetEq}
                     className="w-full py-2 text-[10px] uppercase font-mono text-hw-muted hover:text-hw-accent transition-colors"
                   >
                     Reset to Flat
@@ -315,7 +315,7 @@ const getApiUrl = () => '/api/radio-browser';
 const checkStreamReachability = async (url: string): Promise<boolean> => {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     const response = await fetch('/api/check-stream', {
       method: 'POST',
@@ -411,6 +411,40 @@ export default function App() {
   const [stations, setStations] = useState<Station[]>(CURATED_STATIONS);
   const [trendingStations, setTrendingStations] = useState<Station[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (debouncedQuery) {
+      const filtered = stations.filter(s => 
+        s.name.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
+        s.tags?.some(t => t.toLowerCase().includes(debouncedQuery.toLowerCase())) ||
+        s.country.toLowerCase().includes(debouncedQuery.toLowerCase())
+      );
+      
+      if (filtered.length === 0) {
+        searchStations(debouncedQuery);
+      } else {
+        // If local search finds results, we might want to display them, 
+        // but the current structure updates stations state. 
+        // Let's keep it simple and just rely on searchStations for now if local search is empty,
+        // or update stations state if local search has results.
+        // Actually, the requirement says "Falls die lokale Suche ... nichts findet, soll die App automatisch eine neue API-Abfrage ... starten."
+        // So we should only call searchStations if local search is empty.
+      }
+    } else {
+      // If query cleared, reset to default
+      if (userLocation.country) fetchLocalStations(userLocation.country);
+      else setStations(CURATED_STATIONS);
+    }
+  }, [debouncedQuery]);
   const [selectedCountry, setSelectedCountry] = useState<string>('');
   const [selectedGenre, setSelectedGenre] = useState<string>('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -507,6 +541,15 @@ export default function App() {
     if (filtersRef.current[index]) {
       filtersRef.current[index].gain.value = value;
     }
+  };
+
+  const handleResetEq = () => {
+    const newGains = [0, 0, 0, 0, 0];
+    setEqGains(newGains);
+    localStorage.setItem('waveiq_eq_gains', JSON.stringify(newGains));
+    filtersRef.current.forEach(filter => {
+      if (filter) filter.gain.value = 0;
+    });
   };
 
   const handleSleepTimerChange = (minutes: number | null) => {
@@ -660,6 +703,34 @@ export default function App() {
     throw lastError;
   };
 
+  const selectStation = (station: Station) => {
+    setPlayer(prev => ({ ...prev, currentStation: station, isPlaying: true }));
+  };
+
+  const getActiveList = (): Station[] => {
+    switch (activeTab) {
+      case 'favorites': return favorites;
+      case 'history': return profile.history;
+      default: return stations;
+    }
+  };
+
+  const onSkipNext = () => {
+    const list = getActiveList();
+    if (list.length === 0) return;
+    const currentIndex = list.findIndex(s => s.id === player.currentStation?.id);
+    const nextIndex = (currentIndex + 1) % list.length;
+    selectStation(list[nextIndex]);
+  };
+
+  const onSkipPrevious = () => {
+    const list = getActiveList();
+    if (list.length === 0) return;
+    const currentIndex = list.findIndex(s => s.id === player.currentStation?.id);
+    const prevIndex = (currentIndex - 1 + list.length) % list.length;
+    selectStation(list[prevIndex]);
+  };
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const listenStartTime = useRef<number | null>(null);
   const playPromiseRef = useRef<Promise<void> | null>(null);
@@ -674,8 +745,9 @@ export default function App() {
     const handleWaiting = () => setIsLoading(true);
     const handleError = () => {
       setIsLoading(false);
-      setPlaybackError("Failed to load stream. The source might be offline or unsupported.");
+      setPlaybackError("Failed to load stream. Trying next station...");
       setPlayer(prev => ({ ...prev, isPlaying: false }));
+      onSkipNext();
     };
 
     audio.addEventListener('canplay', handleCanPlay);
@@ -1013,10 +1085,6 @@ export default function App() {
 
   const togglePlay = () => setPlayer(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
   
-  const selectStation = (station: Station) => {
-    setPlayer(prev => ({ ...prev, currentStation: station, isPlaying: true }));
-  };
-
   const toggleFavorite = (station: Station) => {
     setFavorites(prev => 
       prev.some(f => f.id === station.id) 
@@ -1095,6 +1163,7 @@ export default function App() {
         uuid={profile.uuid}
         eqGains={eqGains}
         onEqChange={handleEqChange}
+        onResetEq={handleResetEq}
         sleepTimer={sleepTimer}
         onSleepTimerChange={handleSleepTimerChange}
       />
@@ -1561,7 +1630,10 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-6">
-            <button className="text-hw-muted hover:text-white transition-colors">
+            <button 
+              onClick={onSkipPrevious}
+              className="text-white hover:text-hw-accent transition-colors"
+            >
               <SkipBack size={20} />
             </button>
             <button 
@@ -1570,7 +1642,10 @@ export default function App() {
             >
               {player.isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
             </button>
-            <button className="text-hw-muted hover:text-white transition-colors">
+            <button 
+              onClick={onSkipNext}
+              className="text-white hover:text-hw-accent transition-colors"
+            >
               <SkipForward size={20} />
             </button>
           </div>
