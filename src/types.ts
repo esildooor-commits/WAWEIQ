@@ -2,6 +2,7 @@ export interface Station {
   id: string;
   name: string;
   url: string;
+  url_resolved?: string;
   favicon?: string;
   tags?: string[];
   country?: string;
@@ -9,6 +10,8 @@ export interface Station {
   votes?: number;
   clickcount?: number;
   lastcheckok?: boolean;
+  nowPlaying?: string;
+  bitrate?: number;
 }
 
 export interface PlayerState {

@@ -5,6 +5,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dns from "dns";
 import { promisify } from "util";
+import http from "http";
+import https from "https";
 
 const resolveSrv = promisify(dns.resolveSrv);
 
@@ -266,6 +268,122 @@ async function startServer() {
     }
 
     res.status(502).json({ error: "All location providers failed" });
+  });
+
+  // ICY Metadata Proxy
+  app.get("/api/metadata", (req, res) => {
+    const streamUrl = req.query.url as string;
+    if (!streamUrl) return res.status(400).json({ error: "URL is required" });
+
+    const client = streamUrl.startsWith('https') ? https : http;
+    
+    const request = client.get(streamUrl, {
+      headers: {
+        'Icy-MetaData': '1',
+        'User-Agent': 'WaveIQ/1.0'
+      },
+      insecureHTTPParser: true
+    }, (response) => {
+      const metaint = parseInt(response.headers['icy-metaint'] as string);
+      
+      if (!metaint) {
+        request.destroy();
+        return res.json({ title: null });
+      }
+
+      let bytesRead = 0;
+      response.on('data', (chunk) => {
+        bytesRead += chunk.length;
+        if (bytesRead >= metaint) {
+          const offset = chunk.length - (bytesRead - metaint);
+          const metadataLength = chunk[offset] * 16;
+          
+          if (metadataLength > 0) {
+            const metadata = chunk.slice(offset + 1, offset + 1 + metadataLength).toString();
+            const match = metadata.match(/StreamTitle='(.*?)';/);
+            const title = match ? match[1] : null;
+            
+            request.destroy();
+            if (!res.headersSent) {
+              res.json({ title });
+            }
+          } else {
+            // No metadata in this block, keep reading or give up
+            // For simplicity, we'll just try once more or return null
+            request.destroy();
+            if (!res.headersSent) {
+              res.json({ title: null });
+            }
+          }
+        }
+      });
+    });
+
+    request.on('error', (err) => {
+      console.error("[Metadata] Error fetching stream:", err.message);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      if (!res.headersSent) {
+        request.destroy();
+        res.json({ title: null, error: "Timeout" });
+      }
+    }, 5000);
+  });
+
+  // Audio Stream Proxy (to handle Mixed Content and CORS)
+  app.get("/api/proxy-stream", (req, res) => {
+    const streamUrl = req.query.url as string;
+    if (!streamUrl) return res.status(400).send("URL is required");
+
+    console.log(`[Proxy-Stream] Proxying: ${streamUrl}`);
+
+    const client = streamUrl.startsWith('https') ? https : http;
+    
+    const proxyReq = client.get(streamUrl, {
+      headers: {
+        'User-Agent': 'WaveIQ/1.0',
+        'Accept': '*/*',
+        'Icy-MetaData': '1'
+      },
+      timeout: 10000,
+      insecureHTTPParser: true
+    }, (proxyRes) => {
+      // Forward headers
+      const headersToForward = [
+        'content-type',
+        'content-length',
+        'icy-name',
+        'icy-genre',
+        'icy-br',
+        'icy-metaint',
+        'access-control-allow-origin'
+      ];
+
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      headersToForward.forEach(h => {
+        if (proxyRes.headers[h]) {
+          res.setHeader(h, proxyRes.headers[h] as string);
+        }
+      });
+
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => {
+      console.error("[Proxy-Stream] Error:", err.message);
+      if (!res.headersSent) {
+        res.status(500).send(err.message);
+      }
+    });
+
+    req.on('close', () => {
+      proxyReq.destroy();
+    });
   });
 
   // Vite middleware for development

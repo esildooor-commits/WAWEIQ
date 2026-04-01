@@ -22,7 +22,9 @@ import {
   Wifi,
   WifiOff,
   Timer,
-  SlidersHorizontal
+  SlidersHorizontal,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Station, PlayerState, HistoryItem, UserProfile } from './types';
@@ -122,6 +124,7 @@ const SettingsModal = ({
   sleepTimer: number | null;
   onSleepTimerChange: (minutes: number | null) => void;
 }) => {
+  const [isEqExpanded, setIsEqExpanded] = React.useState(false);
   const eqLabels = ['60Hz', '230Hz', '910Hz', '3.6kHz', '14kHz'];
   const timerOptions = [
     { label: 'Off', value: null },
@@ -202,35 +205,46 @@ const SettingsModal = ({
 
               {/* Equalizer */}
               <div>
-                <label className="text-xs uppercase tracking-widest text-hw-muted font-mono mb-4 flex items-center gap-2">
-                  <SlidersHorizontal size={14} className="text-hw-accent" />
-                  Audio Equalizer
-                </label>
-                <div className="space-y-4 bg-black/20 p-4 rounded-2xl hw-border">
-                  {eqGains.map((gain, i) => (
-                    <div key={eqLabels[i]} className="space-y-1">
-                      <div className="flex justify-between text-[10px] font-mono text-hw-muted">
-                        <span>{eqLabels[i]}</span>
-                        <span className={gain !== 0 ? 'text-hw-accent' : ''}>{gain > 0 ? `+${gain}` : gain}dB</span>
+                <button 
+                  onClick={() => setIsEqExpanded(!isEqExpanded)}
+                  className="w-full flex items-center justify-between text-xs uppercase tracking-widest text-hw-muted font-mono mb-4"
+                >
+                  <span className="flex items-center gap-2">
+                    <SlidersHorizontal size={14} className="text-hw-accent" />
+                    Audio Equalizer
+                  </span>
+                  {isEqExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+                {isEqExpanded && (
+                  <div className="space-y-4 bg-black/20 p-4 rounded-2xl hw-border">
+                    {eqGains.map((gain, i) => (
+                      <div key={eqLabels[i]} className="space-y-1">
+                        <div className="flex justify-between text-[10px] font-mono text-hw-muted">
+                          <span>{eqLabels[i]}</span>
+                          <span className={gain !== 0 ? 'text-hw-accent' : ''}>{gain > 0 ? `+${gain}` : gain}dB</span>
+                        </div>
+                        <input 
+                          type="range" 
+                          min="-12" 
+                          max="12" 
+                          step="1"
+                          value={gain}
+                          onChange={(e) => onEqChange(i, parseInt(e.target.value))}
+                          className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-hw-accent"
+                        />
                       </div>
-                      <input 
-                        type="range" 
-                        min="-12" 
-                        max="12" 
-                        step="1"
-                        value={gain}
-                        onChange={(e) => onEqChange(i, parseInt(e.target.value))}
-                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-hw-accent"
-                      />
-                    </div>
-                  ))}
-                  <button 
-                    onClick={onResetEq}
-                    className="w-full py-2 text-[10px] uppercase font-mono text-hw-muted hover:text-hw-accent transition-colors"
-                  >
-                    Reset to Flat
-                  </button>
-                </div>
+                    ))}
+                    <button 
+                      onClick={() => {
+                        onResetEq();
+                        setIsEqExpanded(false);
+                      }}
+                      className="w-full py-2 text-[10px] uppercase font-mono text-hw-muted hover:text-hw-accent transition-colors"
+                    >
+                      Reset to Flat
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -313,6 +327,13 @@ type Tab = 'featured' | 'trending' | 'top100' | 'discover' | 'favorites' | 'hist
 const getApiUrl = () => '/api/radio-browser';
 
 const checkStreamReachability = async (url: string): Promise<boolean> => {
+  if (!url) return false;
+  
+  const lowerUrl = url.toLowerCase();
+  if (lowerUrl.endsWith('.pls') || lowerUrl.endsWith('.m3u') || lowerUrl.endsWith('.m3u8') || lowerUrl.endsWith('.asx')) {
+    return false;
+  }
+
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -374,9 +395,16 @@ const StationCard = ({ station, currentStationId, isPlaying, onSelect, onToggleF
     </div>
     
     <h3 className="font-semibold truncate pr-8 text-sm md:text-base">{station.name}</h3>
-    <p className="text-[10px] md:text-xs text-hw-muted mt-1 truncate">
-      {station.country} • {station.tags?.slice(0, 2).join(', ')}
-    </p>
+    <div className="text-[10px] md:text-xs text-hw-muted mt-1 truncate">
+      {station.nowPlaying ? (
+        <div className="flex items-center gap-1.5">
+          <div className="w-1.5 h-1.5 rounded-full bg-hw-accent animate-pulse" />
+          <span className="text-hw-accent font-medium">Now Playing: {station.nowPlaying}</span>
+        </div>
+      ) : (
+        <span>{station.country} • {station.tags?.slice(0, 2).join(', ') || 'Radio'}</span>
+      )}
+    </div>
 
     {currentStationId === station.id && isPlaying && (
       <div className="absolute bottom-4 right-4 flex items-end gap-0.5 h-6 pointer-events-none">
@@ -417,34 +445,17 @@ export default function App() {
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedQuery(searchQuery);
-    }, 300);
+      if (searchQuery.trim()) {
+        searchStations(searchQuery);
+      } else if (debouncedQuery && !searchQuery.trim()) {
+        // Reset to default view when search is cleared
+        if (userLocation.country) fetchLocalStations(userLocation.country);
+        else setStations(CURATED_STATIONS);
+      }
+    }, 400);
     return () => clearTimeout(handler);
   }, [searchQuery]);
 
-  useEffect(() => {
-    if (debouncedQuery) {
-      const filtered = stations.filter(s => 
-        s.name.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
-        s.tags?.some(t => t.toLowerCase().includes(debouncedQuery.toLowerCase())) ||
-        s.country.toLowerCase().includes(debouncedQuery.toLowerCase())
-      );
-      
-      if (filtered.length === 0) {
-        searchStations(debouncedQuery);
-      } else {
-        // If local search finds results, we might want to display them, 
-        // but the current structure updates stations state. 
-        // Let's keep it simple and just rely on searchStations for now if local search is empty,
-        // or update stations state if local search has results.
-        // Actually, the requirement says "Falls die lokale Suche ... nichts findet, soll die App automatisch eine neue API-Abfrage ... starten."
-        // So we should only call searchStations if local search is empty.
-      }
-    } else {
-      // If query cleared, reset to default
-      if (userLocation.country) fetchLocalStations(userLocation.country);
-      else setStations(CURATED_STATIONS);
-    }
-  }, [debouncedQuery]);
   const [selectedCountry, setSelectedCountry] = useState<string>('');
   const [selectedGenre, setSelectedGenre] = useState<string>('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -477,8 +488,66 @@ export default function App() {
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isMetadataLoading, setIsMetadataLoading] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
+  const [currentSong, setCurrentSong] = useState<string | null>(null);
+  const [isLive, setIsLive] = useState(false);
+
+  // Metadata polling
+  useEffect(() => {
+    if (!player.isPlaying || !player.currentStation) return;
+
+    const fetchMetadata = async () => {
+      if (!player.currentStation?.url) return;
+      setIsMetadataLoading(true);
+      try {
+        const response = await fetch(`/api/metadata?url=${encodeURIComponent(player.currentStation.url)}`);
+        const data = await response.json();
+        
+        if (data && data.title) {
+            const song = data.title;
+            setCurrentSong(song); 
+            setIsLive(true);
+            // Update active station nowPlaying
+            setPlayer(prev => ({
+                ...prev,
+                currentStation: prev.currentStation ? { ...prev.currentStation, nowPlaying: song } : null
+            }));
+            // Update stations state
+            setStations(prev => prev.map(s => s.id === player.currentStation?.id ? { ...s, nowPlaying: song } : s));
+        } else {
+            // Fallback to Radio Browser API if ICY fails
+            const rbResponse = await fetch(`/api/radio-browser/json/stations/byuuid?uuids=${player.currentStation?.id}`);
+            const rbData = await rbResponse.json();
+            if (rbData && rbData[0] && rbData[0].last_metadata_update) {
+                const song = rbData[0].name;
+                setCurrentSong(song);
+                setIsLive(true);
+                setPlayer(prev => ({
+                    ...prev,
+                    currentStation: prev.currentStation ? { ...prev.currentStation, nowPlaying: song } : null
+                }));
+                setStations(prev => prev.map(s => s.id === player.currentStation?.id ? { ...s, nowPlaying: song } : s));
+            } else {
+                setCurrentSong(null);
+                setIsLive(false);
+            }
+        }
+      } catch (e) {
+        console.error("Metadata fetch failed", e);
+        setCurrentSong(null);
+        setIsLive(false);
+      } finally {
+        setIsMetadataLoading(false);
+      }
+    };
+
+    fetchMetadata();
+    const interval = setInterval(fetchMetadata, 30000);
+    return () => clearInterval(interval);
+  }, [player.isPlaying, player.currentStation?.id]);
+
 
   // --- Sleep Timer & EQ State ---
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
@@ -743,11 +812,61 @@ export default function App() {
     
     const handleCanPlay = () => setIsLoading(false);
     const handleWaiting = () => setIsLoading(true);
-    const handleError = () => {
+    const handleError = (e: any) => {
       setIsLoading(false);
-      setPlaybackError("Failed to load stream. Trying next station...");
+      const audio = audioRef.current;
+      if (!audio) return;
+      
+      const error = audio.error;
+      let message = "Failed to load stream.";
+      
+      if (error) {
+        switch (error.code) {
+          case 1: message = "Playback aborted."; break;
+          case 2: message = "Network error. Check your connection."; break;
+          case 3: message = "Decoding error. Format not supported."; break;
+          case 4: message = "Source not found or mixed content blocked."; break;
+        }
+      }
+      
+      // Try alternative URL if available
+      const currentStation = player.currentStation;
+      if (currentStation && currentStation.url && currentStation.url_resolved) {
+        const currentSrc = audio.src;
+        const urlProxy = `/api/proxy-stream?url=${encodeURIComponent(currentStation.url)}`;
+        const resolvedProxy = `/api/proxy-stream?url=${encodeURIComponent(currentStation.url_resolved)}`;
+        
+        // If we tried resolved and it failed, try original
+        if (currentSrc.includes(encodeURIComponent(currentStation.url_resolved)) || currentSrc === currentStation.url_resolved) {
+          console.log("[Playback] Resolved URL failed, trying original URL...");
+          const nextUrl = currentStation.url.startsWith('http://') ? urlProxy : currentStation.url;
+          if (audio.src !== nextUrl) {
+            audio.src = nextUrl;
+            audio.load();
+            audio.play().catch(() => {});
+            return;
+          }
+        } 
+        // If we tried original and it failed, try resolved (if not tried yet)
+        else if (currentSrc.includes(encodeURIComponent(currentStation.url)) || currentSrc === currentStation.url) {
+          console.log("[Playback] Original URL failed, trying resolved URL...");
+          const nextUrl = currentStation.url_resolved.startsWith('http://') ? resolvedProxy : currentStation.url_resolved;
+          if (audio.src !== nextUrl) {
+            audio.src = nextUrl;
+            audio.load();
+            audio.play().catch(() => {});
+            return;
+          }
+        }
+      }
+
+      setPlaybackError(`${message} Trying next station...`);
       setPlayer(prev => ({ ...prev, isPlaying: false }));
-      onSkipNext();
+      
+      // Wait 2 seconds before skipping to let the user see the error
+      setTimeout(() => {
+        onSkipNext();
+      }, 2000);
     };
 
     audio.addEventListener('canplay', handleCanPlay);
@@ -826,19 +945,21 @@ export default function App() {
         const mapped: Station[] = data.map((s: any) => ({
           id: s.stationuuid,
           name: s.name,
-          url: s.url_resolved,
+          url: s.url,
+          url_resolved: s.url_resolved,
           favicon: s.favicon,
           tags: s.tags ? s.tags.split(',') : [],
           country: s.country,
           language: s.language,
           votes: s.votes,
           clickcount: s.clickcount,
-          lastcheckok: s.lastcheckok === 1
+          lastcheckok: s.lastcheckok === 1,
+          bitrate: s.bitrate
         }));
         
         // Auto-check first 15 stations
         const checked = await Promise.all(mapped.slice(0, 15).map(async (s) => {
-          const isReachable = await checkStreamReachability(s.url);
+          const isReachable = await checkStreamReachability(s.url_resolved || s.url);
           return isReachable ? s : null;
         }));
         
@@ -857,19 +978,21 @@ export default function App() {
       const mapped: Station[] = data.map((s: any) => ({
         id: s.stationuuid,
         name: s.name,
-        url: s.url_resolved,
+        url: s.url,
+        url_resolved: s.url_resolved,
         favicon: s.favicon,
         tags: s.tags ? s.tags.split(',') : [],
         country: s.country,
         language: s.language,
         votes: s.votes,
         clickcount: s.clickcount,
-        lastcheckok: s.lastcheckok === 1
+        lastcheckok: s.lastcheckok === 1,
+        bitrate: s.bitrate
       }));
       
       // Auto-check first 20 stations for Top 100
       const checked = await Promise.all(mapped.slice(0, 20).map(async (s) => {
-        const isReachable = await checkStreamReachability(s.url);
+        const isReachable = await checkStreamReachability(s.url_resolved || s.url);
         return isReachable ? s : null;
       }));
       
@@ -923,19 +1046,21 @@ export default function App() {
       const mapped: Station[] = filteredData.map((s: any) => ({
         id: s.stationuuid,
         name: s.name,
-        url: s.url_resolved,
+        url: s.url,
+        url_resolved: s.url_resolved,
         favicon: s.favicon,
         tags: s.tags ? s.tags.split(',').map((t: string) => t.trim()) : [],
         country: s.country,
         language: s.language,
         votes: s.votes,
         clickcount: s.clickcount,
-        lastcheckok: s.lastcheckok === 1
+        lastcheckok: s.lastcheckok === 1,
+        bitrate: s.bitrate
       }));
       
       // Auto-check first 15 stations
       const checked = await Promise.all(mapped.slice(0, 15).map(async (s) => {
-        const isReachable = await checkStreamReachability(s.url);
+        const isReachable = await checkStreamReachability(s.url_resolved || s.url);
         return isReachable ? s : null;
       }));
       
@@ -955,14 +1080,16 @@ export default function App() {
       const mapped: Station[] = data.map((s: any) => ({
         id: s.stationuuid,
         name: s.name,
-        url: s.url_resolved,
+        url: s.url,
+        url_resolved: s.url_resolved,
         favicon: s.favicon,
         tags: s.tags ? s.tags.split(',') : [],
         country: s.country,
         language: s.language,
         votes: s.votes,
         clickcount: s.clickcount,
-        lastcheckok: s.lastcheckok === 1
+        lastcheckok: s.lastcheckok === 1,
+        bitrate: s.bitrate
       }));
       setTrendingStations(mapped);
     } catch (error) {
@@ -997,7 +1124,7 @@ export default function App() {
     const managePlayback = async () => {
       try {
         // 1. Handle Source Change
-        if (audio.src !== player.currentStation?.url) {
+        if (audio.src !== player.currentStation?.url && audio.src !== player.currentStation?.url_resolved) {
           setPlaybackError(null);
           setIsLoading(true);
           
@@ -1006,7 +1133,41 @@ export default function App() {
           }
           
           audio.pause();
-          audio.src = player.currentStation?.url || '';
+          
+          const url = player.currentStation?.url || '';
+          const url_resolved = player.currentStation?.url_resolved;
+          
+          if (!url && !url_resolved) {
+            setPlaybackError("No stream URL found. Trying next...");
+            setTimeout(() => onSkipNext(), 2000);
+            return;
+          }
+
+          // Check for unsupported playlist formats
+          const lowerUrl = (url_resolved || url).toLowerCase();
+          if (lowerUrl.endsWith('.pls') || lowerUrl.endsWith('.m3u') || lowerUrl.endsWith('.m3u8') || lowerUrl.endsWith('.asx')) {
+            setPlaybackError("Playlist format (.pls/.m3u/.m3u8) not supported. Trying next...");
+            setTimeout(() => onSkipNext(), 2000);
+            return;
+          }
+
+          // Prefer HTTPS, fallback to proxy for HTTP
+          // APK-Ready: In a native Android APK with cleartextTraffic enabled, 
+          // we could use HTTP directly. In the browser, we must use the proxy.
+          let streamToUse = url_resolved || url;
+          
+          // If resolved is HTTP but original is HTTPS, use original
+          if (url_resolved?.startsWith('http://') && url?.startsWith('https://')) {
+            streamToUse = url;
+          } else if (url?.startsWith('http://') && url_resolved?.startsWith('https://')) {
+            streamToUse = url_resolved;
+          }
+          
+          const finalUrl = streamToUse.startsWith('http://') 
+            ? `/api/proxy-stream?url=${encodeURIComponent(streamToUse)}` 
+            : streamToUse;
+            
+          audio.src = finalUrl;
           audio.load();
         }
 
@@ -1111,14 +1272,16 @@ export default function App() {
       const mapped: Station[] = data.map((s: any) => ({
         id: s.stationuuid,
         name: s.name,
-        url: s.url_resolved,
+        url: s.url,
+        url_resolved: s.url_resolved,
         favicon: s.favicon,
         tags: s.tags ? s.tags.split(',') : [],
         country: s.country,
         language: s.language,
         votes: s.votes,
         clickcount: s.clickcount,
-        lastcheckok: s.lastcheckok === 1
+        lastcheckok: s.lastcheckok === 1,
+        bitrate: s.bitrate
       }));
       setStations(mapped);
       setActiveTab('featured');
@@ -1144,13 +1307,41 @@ export default function App() {
     );
   }, [profile.tagPreferences, player.currentStation]);
 
+  useEffect(() => {
+    if (debouncedQuery) {
+      const list = activeTab === 'favorites' ? favorites : 
+                   activeTab === 'discover' ? recommendations :
+                   activeTab === 'trending' ? trendingStations : stations;
+      
+      const filtered = list.filter(s => 
+        s.name.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
+        s.tags?.some(t => t.toLowerCase().includes(debouncedQuery.toLowerCase())) ||
+        s.country.toLowerCase().includes(debouncedQuery.toLowerCase())
+      );
+      
+      if (filtered.length === 0) {
+        searchStations(debouncedQuery);
+      }
+    }
+  }, [debouncedQuery, activeTab, stations, favorites, recommendations, trendingStations]);
+
   const displayStations = useMemo(() => {
-    if (activeTab === 'favorites') return favorites;
-    if (activeTab === 'discover') return recommendations;
-    if (activeTab === 'trending') return trendingStations;
-    if (activeTab === 'smart_shuffle') return stations;
-    return stations;
-  }, [activeTab, stations, favorites, recommendations, trendingStations]);
+    let list: Station[] = [];
+    if (activeTab === 'favorites') list = favorites;
+    else if (activeTab === 'discover') list = recommendations;
+    else if (activeTab === 'trending') list = trendingStations;
+    else list = stations;
+
+    if (debouncedQuery) {
+      return list.filter(s => 
+        s.name.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
+        s.tags?.some(t => t.toLowerCase().includes(debouncedQuery.toLowerCase())) ||
+        s.country.toLowerCase().includes(debouncedQuery.toLowerCase())
+      );
+    }
+    
+    return list;
+  }, [activeTab, stations, favorites, recommendations, trendingStations, debouncedQuery]);
 
   return (
     <div className="fixed inset-0 flex flex-col bg-hw-bg text-hw-text font-sans overflow-hidden select-none">
@@ -1174,6 +1365,14 @@ export default function App() {
           <Zap className="text-hw-accent" size={20} />
           <h1 className="text-lg font-bold tracking-tighter font-mono">WAVEIQ</h1>
         </div>
+        
+        {sleepTimer !== null && (
+          <div className="flex items-center gap-2 px-3 py-1 bg-hw-accent/10 border border-hw-accent/20 rounded-full">
+            <Timer size={12} className="text-hw-accent animate-pulse" />
+            <span className="text-[9px] font-mono text-hw-accent">{sleepTimer}m {timerSeconds}s</span>
+          </div>
+        )}
+
         <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-hw-panel rounded-full hw-border">
           <Settings size={18} className="text-hw-muted" />
         </button>
@@ -1186,7 +1385,15 @@ export default function App() {
           <div className="w-10 h-10 bg-hw-accent rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(0,255,65,0.4)]">
             <Zap className="text-black" size={24} />
           </div>
-          <h1 className="text-xl font-bold tracking-tighter hw-text-glow font-mono">WAVEIQ</h1>
+          <div>
+            <h1 className="text-xl font-bold tracking-tighter hw-text-glow font-mono">WAVEIQ</h1>
+            {sleepTimer !== null && (
+              <div className="flex items-center gap-1 text-[9px] text-hw-accent font-mono uppercase tracking-widest mt-0.5">
+                <Timer size={10} className="animate-pulse" />
+                <span>{sleepTimer}m {timerSeconds}s</span>
+              </div>
+            )}
+          </div>
         </div>
 
         <nav className="flex flex-col gap-2">
@@ -1269,8 +1476,19 @@ export default function App() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && searchStations(searchQuery)}
-                className="w-full bg-hw-panel hw-border rounded-full py-2.5 md:py-3 pl-12 pr-6 text-sm focus:outline-none focus:ring-1 focus:ring-hw-accent/50 transition-all"
+                className="w-full bg-hw-panel hw-border rounded-full py-2.5 md:py-3 pl-12 pr-12 text-sm focus:outline-none focus:ring-1 focus:ring-hw-accent/50 transition-all"
               />
+              {searchQuery && (
+                <button 
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDebouncedQuery('');
+                  }}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-hw-muted hover:text-white transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              )}
             </div>
           </div>
 
@@ -1520,6 +1738,10 @@ export default function App() {
                 <p className="text-sm text-hw-muted">All your listening data is stored locally on this device. No personal data is sent to our servers.</p>
               </div>
             </div>
+          ) : displayStations.length === 0 && debouncedQuery ? (
+            <div className="text-center py-20 bg-hw-panel hw-border rounded-3xl">
+              <p className="text-hw-muted">Kein Sender für '{debouncedQuery}' gefunden.</p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               <AnimatePresence mode="popLayout">
@@ -1621,12 +1843,19 @@ export default function App() {
             )}
           </div>
           <div className="text-center w-full max-w-xs md:max-w-md">
-            <h4 className="font-bold truncate text-sm md:text-lg text-white tracking-tight">
+            <p className="text-[10px] md:text-xs text-hw-muted truncate tracking-widest uppercase">
               {player.currentStation?.name || 'Select a station'}
-            </h4>
-            <p className="md:hidden text-[9px] font-mono text-hw-accent uppercase tracking-widest mt-0.5">
-              {playbackError ? 'Error' : player.isPlaying ? (isLoading ? 'Buffering...' : 'Live') : 'Ready'}
             </p>
+            <h4 className="font-bold truncate text-base md:text-xl text-white tracking-tight mt-1 animate-pulse-green">
+              {isMetadataLoading ? 'Lade Songinfo...' : (currentSong || (player.currentStation ? `${player.currentStation.tags?.slice(0, 2).join(', ') || 'Radio'}` : 'Ready'))}
+              {player.currentStation?.bitrate && <span className="hidden md:inline text-sm text-hw-muted ml-2">({player.currentStation.bitrate}kbps)</span>}
+            </h4>
+            {isLive && !isMetadataLoading && (
+              <div className="flex items-center justify-center gap-1 mt-1">
+                <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[9px] text-red-500 uppercase tracking-widest">Live</span>
+              </div>
+            )}
           </div>
           
           <div className="flex items-center gap-6">
@@ -1638,7 +1867,7 @@ export default function App() {
             </button>
             <button 
               onClick={togglePlay}
-              className="w-12 h-12 md:w-14 md:h-14 rounded-full bg-hw-accent text-black flex items-center justify-center hover:scale-105 transition-transform hw-glow"
+              className={`w-12 h-12 md:w-14 md:h-14 rounded-full bg-hw-accent text-black flex items-center justify-center hover:scale-105 transition-transform hw-glow ${player.isPlaying && !isLoading ? 'animate-pulse' : ''}`}
             >
               {player.isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
             </button>
