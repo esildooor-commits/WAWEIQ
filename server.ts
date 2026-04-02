@@ -128,15 +128,20 @@ async function startServer() {
     // Ensure path starts with /
     let cleanPath = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
     
+    // Attempt to fix potential case sensitivity issues and endpoint naming for country codes
+    if (cleanPath.includes('/bycountrycode/')) {
+      cleanPath = cleanPath.replace('/bycountrycode/', '/bycountry/');
+    }
+    
     // Ensure path starts with /
     if (!cleanPath.startsWith('/')) {
       cleanPath = `/${cleanPath}`;
     }
     
-    // Lowercase the country code part without rewriting the endpoint itself.
-    const parts = cleanPath.split('/bycountrycode/');
+    // Lowercase the country code part
+    const parts = cleanPath.split('/bycountry/');
     if (parts.length > 1) {
-      cleanPath = `${parts[0]}/bycountrycode/${parts[1].toLowerCase()}`;
+      cleanPath = `${parts[0]}/bycountry/${parts[1].toLowerCase()}`;
     }
 
     // Use dynamic mirrors, shuffled but prioritizing known good ones

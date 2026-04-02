@@ -12,10 +12,6 @@
   --color-hw-muted: #8e9299;
 }
 
-:root {
-  color-scheme: dark;
-}
-
 html, body {
   height: 100%;
   margin: 0;
@@ -31,10 +27,6 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-#root {
-  height: 100%;
 }
 
 /* Custom Scrollbar */
@@ -71,75 +63,4 @@ body {
 .animate-pulse-green {
   animation: pulse-green 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   color: var(--color-hw-accent);
-}
-
-.safe-top-bar {
-  padding-top: env(safe-area-inset-top, 24px);
-}
-
-.station-now-playing {
-  display: block;
-  font-size: 0.625rem;
-  line-height: 1.15;
-}
-
-.mobile-song-title {
-  line-height: 1.15;
-}
-
-@media (max-width: 767px) {
-  .safe-top-bar {
-    min-height: calc(4rem + env(safe-area-inset-top, 24px));
-  }
-
-  .mobile-player-bar {
-    min-height: 11.75rem;
-    padding-top: 1rem;
-    padding-bottom: calc(env(safe-area-inset-bottom, 20px) + 1.25rem);
-    padding-left: 1rem;
-    padding-right: 1rem;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.85rem;
-  }
-
-  .mobile-player-top {
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .mobile-player-center {
-    width: 100%;
-    gap: 0.65rem;
-  }
-
-  .mobile-player-meta {
-    max-width: none;
-    padding-inline: 0.25rem;
-  }
-
-  .mobile-song-title {
-    display: -webkit-box;
-    overflow: hidden;
-    white-space: normal;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-
-  .mobile-player-controls {
-    width: 100%;
-    justify-content: center;
-    padding-top: 0.25rem;
-  }
-
-  .mobile-player-side {
-    width: 100%;
-    justify-content: space-between;
-    padding-inline: 0.25rem;
-  }
-
-  .mobile-volume-strip {
-    flex: 1;
-    max-width: none;
-  }
 }

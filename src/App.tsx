@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { 
   Play, 
   Pause, 
@@ -324,39 +323,8 @@ const COUNTRIES = [
 
 type Tab = 'featured' | 'trending' | 'top100' | 'discover' | 'favorites' | 'history' | 'insights' | 'smart_shuffle';
 
-const isNativeApp = Capacitor.isNativePlatform();
-const RADIO_BROWSER_MIRRORS = [
-  'https://de1.api.radio-browser.info',
-  'https://at1.api.radio-browser.info',
-  'https://nl1.api.radio-browser.info',
-  'https://all.api.radio-browser.info',
-];
-
-const getRadioBrowserTargets = (path: string) => {
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  if (!isNativeApp) {
-    return [`/api/radio-browser${normalizedPath}`];
-  }
-
-  return RADIO_BROWSER_MIRRORS.map((mirror) => `${mirror}${normalizedPath}`);
-};
-
-const getPlayableStreamUrl = (streamUrl: string) => {
-  if (!streamUrl) return '';
-  if (isNativeApp || !streamUrl.startsWith('http://')) {
-    return streamUrl;
-  }
-
-  return `/api/proxy-stream?url=${encodeURIComponent(streamUrl)}`;
-};
-
-const parseResponseData = (payload: unknown) => {
-  if (typeof payload === 'string') {
-    return JSON.parse(payload);
-  }
-
-  return payload;
-};
+// Multi-Source Provider Logic (Proxied via Server)
+const getApiUrl = () => '/api/radio-browser';
 
 const checkStreamReachability = async (url: string): Promise<boolean> => {
   if (!url) return false;
@@ -364,10 +332,6 @@ const checkStreamReachability = async (url: string): Promise<boolean> => {
   const lowerUrl = url.toLowerCase();
   if (lowerUrl.endsWith('.pls') || lowerUrl.endsWith('.m3u') || lowerUrl.endsWith('.m3u8') || lowerUrl.endsWith('.asx')) {
     return false;
-  }
-
-  if (isNativeApp) {
-    return true;
   }
 
   try {
@@ -435,7 +399,7 @@ const StationCard = ({ station, currentStationId, isPlaying, onSelect, onToggleF
       {station.nowPlaying ? (
         <div className="flex items-center gap-1.5">
           <div className="w-1.5 h-1.5 rounded-full bg-hw-accent animate-pulse" />
-          <span className="station-now-playing text-hw-accent font-medium">Now Playing: {station.nowPlaying}</span>
+          <span className="text-hw-accent font-medium">Now Playing: {station.nowPlaying}</span>
         </div>
       ) : (
         <span>{station.country} • {station.tags?.slice(0, 2).join(', ') || 'Radio'}</span>
@@ -485,7 +449,7 @@ export default function App() {
         searchStations(searchQuery);
       } else if (debouncedQuery && !searchQuery.trim()) {
         // Reset to default view when search is cleared
-        if (userLocation.countryCode) fetchLocalStations(userLocation.countryCode);
+        if (userLocation.country) fetchLocalStations(userLocation.country);
         else setStations(CURATED_STATIONS);
       }
     }, 400);
@@ -538,34 +502,37 @@ export default function App() {
       if (!player.currentStation?.url) return;
       setIsMetadataLoading(true);
       try {
-        let song: string | null = null;
-
-        if (!isNativeApp) {
-          const response = await fetch(`/api/metadata?url=${encodeURIComponent(player.currentStation.url)}`);
-          const data = await response.json();
-          if (data && data.title) {
-            song = data.title;
-          }
-        }
-
-        if (!song) {
-          const rbData = await fetchWithRetry(`/json/stations/byuuid?uuids=${encodeURIComponent(player.currentStation.id)}`);
-          if (rbData && rbData[0]) {
-            song = rbData[0].name || rbData[0].lastmetadata || null;
-          }
-        }
-
-        if (song) {
-          setCurrentSong(song);
-          setIsLive(true);
-          setPlayer(prev => ({
-            ...prev,
-            currentStation: prev.currentStation ? { ...prev.currentStation, nowPlaying: song ?? undefined } : null
-          }));
-          setStations(prev => prev.map(s => s.id === player.currentStation?.id ? { ...s, nowPlaying: song ?? undefined } : s));
+        const response = await fetch(`/api/metadata?url=${encodeURIComponent(player.currentStation.url)}`);
+        const data = await response.json();
+        
+        if (data && data.title) {
+            const song = data.title;
+            setCurrentSong(song); 
+            setIsLive(true);
+            // Update active station nowPlaying
+            setPlayer(prev => ({
+                ...prev,
+                currentStation: prev.currentStation ? { ...prev.currentStation, nowPlaying: song } : null
+            }));
+            // Update stations state
+            setStations(prev => prev.map(s => s.id === player.currentStation?.id ? { ...s, nowPlaying: song } : s));
         } else {
-          setCurrentSong(null);
-          setIsLive(false);
+            // Fallback to Radio Browser API if ICY fails
+            const rbResponse = await fetch(`/api/radio-browser/json/stations/byuuid?uuids=${player.currentStation?.id}`);
+            const rbData = await rbResponse.json();
+            if (rbData && rbData[0] && rbData[0].last_metadata_update) {
+                const song = rbData[0].name;
+                setCurrentSong(song);
+                setIsLive(true);
+                setPlayer(prev => ({
+                    ...prev,
+                    currentStation: prev.currentStation ? { ...prev.currentStation, nowPlaying: song } : null
+                }));
+                setStations(prev => prev.map(s => s.id === player.currentStation?.id ? { ...s, nowPlaying: song } : s));
+            } else {
+                setCurrentSong(null);
+                setIsLive(false);
+            }
         }
       } catch (e) {
         console.error("Metadata fetch failed", e);
@@ -739,77 +706,65 @@ export default function App() {
   const fetchWithRetry = async (path: string, options: RequestInit = {}, retries = 3): Promise<any> => {
     let lastError: any;
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    const targets = getRadioBrowserTargets(normalizedPath);
     
     for (let i = 0; i < retries; i++) {
-      for (const target of targets) {
+      try {
+        // Ensure path starts with / for consistent proxy routing
+        const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+        const url = `/api/radio-browser${normalizedPath}`;
+        
+        const response = await fetch(url, {
+          ...options,
+          headers: {
+            ...options.headers,
+            'Accept': 'application/json, text/plain, */*',
+          }
+        });
+        
+        const contentType = response.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json') || 
+                       contentType.includes('text/json') ||
+                       contentType.includes('text/javascript');
+
+        const text = await response.text();
+        let data: any;
+        let parseError = false;
+
         try {
-          if (isNativeApp) {
-            const response = await CapacitorHttp.get({
-              url: target,
-              headers: {
-                Accept: 'application/json, text/plain, */*',
-                ...(options.headers as Record<string, string> | undefined),
-              },
-            });
-
-            const data = parseResponseData(response.data);
-            if (response.status < 200 || response.status >= 300 || (data && data.success === false)) {
-              const errorMessage = data?.error || data?.details || `HTTP error! status: ${response.status}`;
-              throw new Error(errorMessage);
-            }
-
-            return data;
-          }
-
-          const response = await fetch(target, {
-            ...options,
-            headers: {
-              ...options.headers,
-              'Accept': 'application/json, text/plain, */*',
-            }
-          });
-          
-          const contentType = response.headers.get('content-type') || '';
-          const text = await response.text();
-          let data: any;
-          let parseError = false;
-
-          try {
-            data = JSON.parse(text);
-          } catch (e) {
-            parseError = true;
-          }
-
-          if (!response.ok || (data && data.success === false)) {
-            let errorMessage = `HTTP error! status: ${response.status}`;
-            if (data && data.error) {
-              errorMessage = data.error || data.details || errorMessage;
-            } else if (!parseError && data) {
-              errorMessage = data.error || data.details || errorMessage;
-            } else {
-              errorMessage = `Server returned non-JSON response (${contentType})`;
-              if (text.length > 0) {
-                console.warn(`[Fetch] Non-JSON response body snippet: ${text.slice(0, 100)}`);
-              }
-            }
-            throw new Error(errorMessage);
-          }
-          
-          if (parseError) {
-            throw new Error(`Expected JSON but received ${contentType || 'unknown'} (Parse failed)`);
-          }
-
-          return data;
-        } catch (error: any) {
-          lastError = error;
-          console.warn(`[Fetch] Attempt ${i + 1} failed for ${target}: ${error.message}`);
+          data = JSON.parse(text);
+        } catch (e) {
+          parseError = true;
         }
-      }
 
-      if (i < retries - 1) {
-        await sleep(Math.pow(2, i) * 500);
+        if (!response.ok || (data && data.success === false)) {
+          let errorMessage = `HTTP error! status: ${response.status}`;
+          if (data && data.error) {
+            errorMessage = data.error || data.details || errorMessage;
+          } else if (!parseError && data) {
+            errorMessage = data.error || data.details || errorMessage;
+          } else {
+            // If it's HTML or something else, it's likely a proxy/server error
+            errorMessage = `Server returned non-JSON response (${contentType})`;
+            if (text.length > 0) {
+              console.warn(`[Fetch] Non-JSON response body snippet: ${text.slice(0, 100)}`);
+            }
+          }
+          throw new Error(errorMessage);
+        }
+        
+        if (parseError) {
+          throw new Error(`Expected JSON but received ${contentType || 'unknown'} (Parse failed)`);
+        }
+
+        return data;
+      } catch (error: any) {
+        lastError = error;
+        console.warn(`[Fetch] Attempt ${i + 1} failed for ${path}: ${error.message}`);
+        
+        if (i < retries - 1) {
+          // Exponential backoff: 500ms, 1000ms, 2000ms...
+          await sleep(Math.pow(2, i) * 500);
+        }
       }
     }
     
@@ -824,9 +779,7 @@ export default function App() {
   const getActiveList = (): Station[] => {
     switch (activeTab) {
       case 'favorites': return favorites;
-      case 'history': return profile.history.map(item => item.station);
-      case 'trending': return trendingStations;
-      case 'discover': return recommendations;
+      case 'history': return profile.history;
       default: return stations;
     }
   };
@@ -880,13 +833,13 @@ export default function App() {
       const currentStation = player.currentStation;
       if (currentStation && currentStation.url && currentStation.url_resolved) {
         const currentSrc = audio.src;
-        const urlProxy = getPlayableStreamUrl(currentStation.url);
-        const resolvedProxy = getPlayableStreamUrl(currentStation.url_resolved);
+        const urlProxy = `/api/proxy-stream?url=${encodeURIComponent(currentStation.url)}`;
+        const resolvedProxy = `/api/proxy-stream?url=${encodeURIComponent(currentStation.url_resolved)}`;
         
         // If we tried resolved and it failed, try original
         if (currentSrc.includes(encodeURIComponent(currentStation.url_resolved)) || currentSrc === currentStation.url_resolved) {
           console.log("[Playback] Resolved URL failed, trying original URL...");
-          const nextUrl = urlProxy;
+          const nextUrl = currentStation.url.startsWith('http://') ? urlProxy : currentStation.url;
           if (audio.src !== nextUrl) {
             audio.src = nextUrl;
             audio.load();
@@ -897,7 +850,7 @@ export default function App() {
         // If we tried original and it failed, try resolved (if not tried yet)
         else if (currentSrc.includes(encodeURIComponent(currentStation.url)) || currentSrc === currentStation.url) {
           console.log("[Playback] Original URL failed, trying resolved URL...");
-          const nextUrl = resolvedProxy;
+          const nextUrl = currentStation.url_resolved.startsWith('http://') ? resolvedProxy : currentStation.url_resolved;
           if (audio.src !== nextUrl) {
             audio.src = nextUrl;
             audio.load();
@@ -1210,7 +1163,9 @@ export default function App() {
             streamToUse = url_resolved;
           }
           
-          const finalUrl = getPlayableStreamUrl(streamToUse);
+          const finalUrl = streamToUse.startsWith('http://') 
+            ? `/api/proxy-stream?url=${encodeURIComponent(streamToUse)}` 
+            : streamToUse;
             
           audio.src = finalUrl;
           audio.load();
@@ -1301,7 +1256,7 @@ export default function App() {
 
   const searchStations = async (query: string) => {
     if (!query && !selectedCountry && !selectedGenre) {
-      if (userLocation.countryCode) fetchLocalStations(userLocation.countryCode);
+      if (userLocation.country) fetchLocalStations(userLocation.country);
       else setStations(CURATED_STATIONS);
       return;
     }
@@ -1361,7 +1316,7 @@ export default function App() {
       const filtered = list.filter(s => 
         s.name.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
         s.tags?.some(t => t.toLowerCase().includes(debouncedQuery.toLowerCase())) ||
-        (s.country ?? '').toLowerCase().includes(debouncedQuery.toLowerCase())
+        s.country.toLowerCase().includes(debouncedQuery.toLowerCase())
       );
       
       if (filtered.length === 0) {
@@ -1381,7 +1336,7 @@ export default function App() {
       return list.filter(s => 
         s.name.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
         s.tags?.some(t => t.toLowerCase().includes(debouncedQuery.toLowerCase())) ||
-        (s.country ?? '').toLowerCase().includes(debouncedQuery.toLowerCase())
+        s.country.toLowerCase().includes(debouncedQuery.toLowerCase())
       );
     }
     
@@ -1405,10 +1360,10 @@ export default function App() {
       />
 
       {/* Mobile Header - Fixed at top */}
-      <div className="safe-top-bar md:hidden flex items-center justify-between px-5 py-3 bg-hw-panel border-b border-white/5 z-50 shrink-0">
+      <div className="md:hidden h-16 flex items-center justify-between px-6 bg-hw-panel border-b border-white/5 z-50 shrink-0">
         <div className="flex items-center gap-2">
-          <Zap className="text-hw-accent" size={18} />
-          <h1 className="text-base font-bold tracking-tight font-mono">WAVEIQ</h1>
+          <Zap className="text-hw-accent" size={20} />
+          <h1 className="text-lg font-bold tracking-tighter font-mono">WAVEIQ</h1>
         </div>
         
         {sleepTimer !== null && (
@@ -1845,8 +1800,8 @@ export default function App() {
     </div>
 
       {/* Player Bar */}
-      <footer className="mobile-player-bar h-auto md:h-36 bg-hw-panel border-t border-white/10 py-4 px-4 md:py-8 md:px-10 flex items-center justify-between gap-4 z-50 shrink-0">
-        <div className="mobile-player-top flex items-center gap-4 w-full md:w-1/3 min-w-0">
+      <footer className="h-32 md:h-36 bg-hw-panel border-t border-white/10 py-6 px-6 md:py-8 md:px-10 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] flex items-center justify-between gap-4 z-50 shrink-0">
+        <div className="flex items-center gap-4 w-1/4 md:w-1/3 min-w-0">
           <div className="flex flex-col items-center gap-1.5">
             <div className="w-12 h-12 md:w-14 md:h-14 rounded-xl bg-black/40 flex-shrink-0 flex items-center justify-center overflow-hidden hw-border">
               {player.currentStation?.favicon ? (
@@ -1875,7 +1830,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mobile-player-center flex flex-col items-center justify-center gap-1 flex-1 min-w-0 h-full relative">
+        <div className="flex flex-col items-center justify-center gap-1 flex-1 min-w-0 h-full relative">
           <div className="absolute -top-6 left-0 right-0 flex justify-center">
             {playbackError && (
               <motion.p 
@@ -1887,11 +1842,11 @@ export default function App() {
               </motion.p>
             )}
           </div>
-          <div className="mobile-player-meta text-center w-full max-w-xs md:max-w-md">
-            <p className="text-[9px] md:text-xs text-hw-muted tracking-[0.22em] uppercase">
+          <div className="text-center w-full max-w-xs md:max-w-md">
+            <p className="text-[10px] md:text-xs text-hw-muted truncate tracking-widest uppercase">
               {player.currentStation?.name || 'Select a station'}
             </p>
-            <h4 className="mobile-song-title font-bold text-sm md:text-xl text-white tracking-tight mt-2 md:mt-1 animate-pulse-green">
+            <h4 className="font-bold truncate text-base md:text-xl text-white tracking-tight mt-1 animate-pulse-green">
               {isMetadataLoading ? 'Lade Songinfo...' : (currentSong || (player.currentStation ? `${player.currentStation.tags?.slice(0, 2).join(', ') || 'Radio'}` : 'Ready'))}
               {player.currentStation?.bitrate && <span className="hidden md:inline text-sm text-hw-muted ml-2">({player.currentStation.bitrate}kbps)</span>}
             </h4>
@@ -1903,7 +1858,7 @@ export default function App() {
             )}
           </div>
           
-          <div className="mobile-player-controls flex items-center gap-6">
+          <div className="flex items-center gap-6">
             <button 
               onClick={onSkipPrevious}
               className="text-white hover:text-hw-accent transition-colors"
@@ -1928,8 +1883,8 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mobile-player-side flex items-center justify-end gap-4 md:gap-6 w-full md:w-1/3">
-          <div className="mobile-volume-strip flex items-center gap-3 w-full max-w-[10.5rem] md:w-32">
+        <div className="flex items-center justify-end gap-6 w-1/4 md:w-1/3">
+          <div className="hidden md:flex items-center gap-3 w-32">
             <button 
               onClick={() => setPlayer(prev => ({ ...prev, isMuted: !prev.isMuted }))}
               className="text-hw-muted hover:text-white transition-colors"
@@ -1948,7 +1903,7 @@ export default function App() {
           </div>
           <button 
             onClick={() => setIsSettingsOpen(true)}
-            className="p-2 rounded-full bg-black/20 text-hw-muted hover:text-white transition-colors hw-border"
+            className="text-hw-muted hover:text-white transition-colors"
           >
             <Settings size={18} />
           </button>

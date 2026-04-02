@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">WaveIQ</string>
-    <string name="title_activity_main">WaveIQ</string>
-    <string name="package_name">com.waveiq.app</string>
-    <string name="custom_url_scheme">com.waveiq.app</string>
-</resources>
